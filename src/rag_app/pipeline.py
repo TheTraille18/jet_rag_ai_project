@@ -4,20 +4,23 @@ from rag_app.config import (
     COLLECTION_NAME,
     DB_PATH,
     DEFAULT_QUERY,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL_ID,
     MODEL_ID,
     PDF_PATH,
 )
 from rag_app.pdf_loader import load_pdf
 from rag_app.text_splitter import split_text
+from rag_app.titan_embeddings import embed_text, embed_texts, get_bedrock_runtime
 from rag_app.vector_store import get_collection, ingest_chunks, query_collection
 
 
-def ensure_pdf_is_indexed(collection) -> None:
+def ensure_pdf_is_indexed(collection, bedrock_runtime) -> None:
     if collection.count() > 0:
         print(f"Using existing Chroma collection with {collection.count()} chunks.")
         return
 
-    print("Collection is empty. Loading PDF and creating embeddings...")
+    print("Collection is empty. Loading PDF and creating Titan embeddings...")
 
     pdf_text = load_pdf(PDF_PATH)
     chunks = split_text(pdf_text)
@@ -25,9 +28,17 @@ def ensure_pdf_is_indexed(collection) -> None:
     print(f"Loaded PDF with {len(pdf_text)} characters")
     print(f"Split into {len(chunks)} chunks")
 
+    embeddings = embed_texts(
+        texts=chunks,
+        bedrock_runtime=bedrock_runtime,
+        model_id=EMBEDDING_MODEL_ID,
+        dimensions=EMBEDDING_DIMENSIONS,
+    )
+
     ingest_chunks(
         collection=collection,
         chunks=chunks,
+        embeddings=embeddings,
         id_prefix="tesla_earning_chunk",
     )
 
@@ -41,15 +52,24 @@ def print_match_scores(results) -> None:
 
 
 def main() -> None:
+    bedrock_runtime = get_bedrock_runtime(AWS_REGION)
+
     collection = get_collection(
         db_path=DB_PATH,
         collection_name=COLLECTION_NAME,
     )
 
-    ensure_pdf_is_indexed(collection)
+    ensure_pdf_is_indexed(collection, bedrock_runtime)
 
     query = DEFAULT_QUERY
-    results = query_collection(collection, query, n_results=3)
+    query_embedding = embed_text(
+        text=query,
+        bedrock_runtime=bedrock_runtime,
+        model_id=EMBEDDING_MODEL_ID,
+        dimensions=EMBEDDING_DIMENSIONS,
+    )
+
+    results = query_collection(collection, query_embedding, n_results=3)
 
     print_match_scores(results)
 
