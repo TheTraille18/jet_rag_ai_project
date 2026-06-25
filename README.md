@@ -1,18 +1,21 @@
 # Tesla Earnings RAG App
 
-This project is a simple Retrieval-Augmented Generation (RAG) example in Python.
-It loads a Tesla earnings PDF, splits the text into chunks, creates embeddings
-with Amazon Titan Embeddings on AWS Bedrock, stores those embeddings in a local
-Chroma vector database, retrieves the most relevant chunks for a question, and
-sends that context to an AWS Bedrock Claude model.
+This project is a Retrieval-Augmented Generation (RAG) example in Python. It loads a
+Tesla earnings PDF, splits the text into chunks, creates embeddings with Amazon Titan
+on AWS Bedrock, stores those embeddings in a local Chroma vector database, retrieves
+the most relevant chunks for a question, and sends that context to Claude through
+AWS Bedrock using LangChain.
 
 ## What It Uses
 
 - Python
+- [LangChain](https://python.langchain.com/) for document loading, text splitting, embeddings, and chat
+- `langchain-community` — `PyPDFLoader` for PDF ingestion
+- `langchain-text-splitters` — `RecursiveCharacterTextSplitter` for chunking
+- `langchain-aws` — `BedrockEmbeddings` and `ChatBedrockConverse`
 - ChromaDB for local vector storage
 - Amazon Titan Text Embeddings V2 for embeddings
-- `pypdf` for reading PDF text
-- AWS Bedrock Runtime for calling Claude
+- Anthropic Claude on AWS Bedrock for generation
 - Cosine distance for vector search
 
 ## Project Structure
@@ -26,12 +29,8 @@ sends that context to an AWS Bedrock Claude model.
 ├── src/
 │   └── rag_app/
 │       ├── __init__.py
-│       ├── bedrock_client.py
 │       ├── config.py
-│       ├── pdf_loader.py
 │       ├── pipeline.py
-│       ├── text_splitter.py
-│       ├── titan_embeddings.py
 │       └── vector_store.py
 ├── doc/
 │   └── Tesla_earnings.pdf
@@ -54,6 +53,7 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+pip install langchain-aws langchain-community langchain-text-splitters
 ```
 
 If you add or update packages later, regenerate `requirements.txt`:
@@ -70,16 +70,12 @@ Make sure your AWS credentials are configured:
 aws configure
 ```
 
-The app currently uses this Bedrock inference profile:
+The app uses these Bedrock models (configured in `src/rag_app/config.py`):
 
 ```python
 MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-```
-
-It also uses this Bedrock embedding model:
-
-```python
 EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
+EMBEDDING_DIMENSIONS = 1024
 ```
 
 You need access to both models enabled in the AWS Bedrock console.
@@ -94,33 +90,33 @@ aws bedrock list-inference-profiles --region us-east-1
 
 On the first run, the app:
 
-1. Loads `./doc/Tesla_earnings.pdf`
-2. Extracts text from the PDF
-3. Splits the text into overlapping chunks
-4. Embeds each chunk using Amazon Titan Text Embeddings V2
-5. Stores the chunks and embeddings in `./db/Tesla_earnings_titan_db`
+1. Loads `./doc/Tesla_earnings.pdf` with LangChain `PyPDFLoader`
+2. Splits the text into overlapping chunks with `RecursiveCharacterTextSplitter`
+3. Embeds each chunk using `BedrockEmbeddings` (Amazon Titan Text Embeddings V2)
+4. Stores the chunks and embeddings in `./db/Tesla_earnings_titan_db`
 
 On later runs, the app reuses the existing Chroma collection instead of embedding
 the PDF again.
 
-Then it asks:
+Then it:
+
+1. Embeds the user question with `embed_query()`
+2. Searches Chroma for the top matching chunks
+3. Builds a prompt with the retrieved context
+4. Sends the prompt to Claude via `ChatBedrockConverse`
+
+The default question is:
 
 ```text
 What is the future of autonomous vehicles?
 ```
 
-The app searches Chroma for the most relevant chunks and sends those chunks to
-Claude through AWS Bedrock.
+### Module overview
 
-The code is split into focused modules:
-
-- `src/rag_app/pdf_loader.py` extracts PDF text.
-- `src/rag_app/text_splitter.py` creates overlapping text chunks.
-- `src/rag_app/vector_store.py` manages Chroma ingestion and retrieval.
-- `src/rag_app/titan_embeddings.py` creates embeddings with Amazon Titan.
-- `src/rag_app/bedrock_client.py` sends retrieved context to AWS Bedrock.
-- `src/rag_app/pipeline.py` coordinates the full RAG workflow.
-- `src/rag_app/config.py` stores paths, model ID, and default query.
+- `src/rag_app/config.py` — paths, model IDs, and default query
+- `src/rag_app/vector_store.py` — Chroma collection setup, ingestion, and retrieval
+- `src/rag_app/pipeline.py` — coordinates load, split, embed, retrieve, and generate
+- `app.py` — entry point
 
 ## Run
 
@@ -147,7 +143,8 @@ Then run the app again.
 metadata={"hnsw:space": "cosine"}
 ```
 
-- Chroma returns cosine distance, so the app converts it to similarity with:
+- Titan embeddings use `normalize: True`, which pairs well with cosine search.
+- Chroma returns cosine distance, so similarity can be approximated with:
 
 ```python
 similarity = 1 - distance

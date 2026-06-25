@@ -1,48 +1,56 @@
-from rag_app.bedrock_client import ask_bedrock
+from langchain_aws import ChatBedrockConverse
 from rag_app.config import (
     AWS_REGION,
     COLLECTION_NAME,
     DB_PATH,
     DEFAULT_QUERY,
-    EMBEDDING_DIMENSIONS,
     EMBEDDING_MODEL_ID,
     MODEL_ID,
     PDF_PATH,
 )
-from rag_app.pdf_loader import load_pdf
-from rag_app.text_splitter import split_text
-from rag_app.titan_embeddings import embed_text, embed_texts, get_bedrock_runtime
+from langchain_aws import BedrockEmbeddings
 from rag_app.vector_store import get_collection, ingest_chunks, query_collection
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader
 
-def ensure_pdf_is_indexed(collection, bedrock_runtime) -> None:
+
+def ensure_pdf_is_indexed(collection, embeddings_model) -> None:
     if collection.count() > 0:
         print(f"Using existing Chroma collection with {collection.count()} chunks.")
         return
 
     print("Collection is empty. Loading PDF and creating Titan embeddings...")
 
-    pdf_text = load_pdf(PDF_PATH)
-    chunks = split_text(pdf_text)
+    # Load PDF
+    pdf_loader = PyPDFLoader(PDF_PATH)
+    docs = pdf_loader.load()
 
-    print(f"Loaded PDF with {len(pdf_text)} characters")
-    print(f"Split into {len(chunks)} chunks")
-
-    embeddings = embed_texts(
-        texts=chunks,
-        bedrock_runtime=bedrock_runtime,
-        model_id=EMBEDDING_MODEL_ID,
-        dimensions=EMBEDDING_DIMENSIONS,
+    # Split pdg into chunks
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=100,
+        chunk_overlap=20,
+        length_function=len,
     )
+
+
+    # Split documents into chunks
+    chunk_docs = text_splitter.split_documents(docs)
+    chunk_texts = [doc.page_content for doc in chunk_docs]
+
+    print(f"Loaded PDF with {len(docs)} pages")
+    print(f"Split into {len(chunk_texts)} chunks")
+
+    embedding_vectors = embeddings_model.embed_documents(chunk_texts)
 
     ingest_chunks(
         collection=collection,
-        chunks=chunks,
-        embeddings=embeddings,
+        chunks=chunk_texts,
+        embeddings=embedding_vectors,
         id_prefix="tesla_earning_chunk",
     )
 
-    print(f"Inserted {len(chunks)} chunks into Chroma.")
+    print(f"Inserted {len(chunk_texts)} chunks into Chroma.")
 
 
 def print_match_scores(results) -> None:
@@ -52,35 +60,55 @@ def print_match_scores(results) -> None:
 
 
 def main() -> None:
-    bedrock_runtime = get_bedrock_runtime(AWS_REGION)
-
     collection = get_collection(
         db_path=DB_PATH,
         collection_name=COLLECTION_NAME,
     )
 
-    ensure_pdf_is_indexed(collection, bedrock_runtime)
+    bedrock = ChatBedrockConverse(
+        model_id=MODEL_ID,
+        region_name=AWS_REGION,
+        max_tokens=700,
+        temperature=0.2,
+    )
+
+    embeddings_model = BedrockEmbeddings(
+        model_id=EMBEDDING_MODEL_ID,
+        region_name=AWS_REGION,
+        model_kwargs={
+            "dimensions": 1024,
+            "normalize": True,
+        },
+    )
+
+    ensure_pdf_is_indexed(collection, embeddings_model)
 
     query = DEFAULT_QUERY
-    query_embedding = embed_text(
-        text=query,
-        bedrock_runtime=bedrock_runtime,
-        model_id=EMBEDDING_MODEL_ID,
-        dimensions=EMBEDDING_DIMENSIONS,
-    )
+
+    query_embedding = embeddings_model.embed_query(query)
 
     results = query_collection(collection, query_embedding, n_results=3)
 
-    print_match_scores(results)
+    matched_documents = results["documents"][0]
 
-    reply = ask_bedrock(
-        question=query,
-        results=results,
-        model_id=MODEL_ID,
-        region=AWS_REGION,
-    )
+    context = "\n\n---\n\n".join(matched_documents)
+
+
+    prompt = f"""Use the context below to answer the question.
+        If the answer is not in the context, say you don't know.
+        Context:
+        {context}
+        Question:
+        {query}
+        """
+
+
+    # print_match_scores(results)
+
+
+    response = bedrock.invoke(prompt)
 
     print("Question:")
     print(query)
     print("\nReply:")
-    print(reply)
+    print(response.content)
