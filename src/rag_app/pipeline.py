@@ -60,11 +60,14 @@ def print_match_scores(results) -> None:
 
 
 def main() -> None:
+
+    # Create a vector DB
     collection = get_collection(
         db_path=DB_PATH,
         collection_name=COLLECTION_NAME,
     )
 
+    # LLM model
     bedrock = ChatBedrockConverse(
         model_id=MODEL_ID,
         region_name=AWS_REGION,
@@ -101,10 +104,6 @@ def main() -> None:
         Question:
         {query}
         """
-
-
-    # print_match_scores(results)
-
 
     response = bedrock.invoke(prompt)
 
