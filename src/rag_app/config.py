@@ -12,4 +12,4 @@ MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIMENSIONS = 1024
 
-DEFAULT_QUERY = "What is the future of autonomous vehicles?"
+DEFAULT_QUERY = "Has the robotaxi made in progress since thie report came out?"
